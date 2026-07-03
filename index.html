@@ -139,7 +139,7 @@
   tbody td{padding:8px 12px; border-bottom:1px solid var(--line); white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis;}
   tbody tr:nth-child(even){background:#FBFAF7;}
   tbody tr:hover{background:#FCF3F0;}
-  td.pn-cell, th.pn-cell{font-family:var(--mono); font-weight:600;}
+  td.key-cell, th.key-cell{font-family:var(--mono); font-weight:600;}
   .empty-state{padding:30px; text-align:center; color:var(--muted); font-size:13px;}
 
   .footer-note{font-size:12px; color:var(--muted); margin-top:40px; border-top:1px solid var(--line); padding-top:16px;}
@@ -185,7 +185,7 @@
   <div class="config-panel" id="configPanel">
     <div class="step-label">Step 2</div>
     <h2 class="section-title">Confirm detection</h2>
-    <p class="section-sub">The tool guesses the company and the Part Number column from each sheet's headers and contents. Override anything it got wrong.</p>
+    <p class="section-sub">The tool guesses the company from each sheet's headers and contents, and guesses Key 1 as a Part Number column. Override anything it got wrong.</p>
 
     <div class="config-row">
       <div class="config-col">
@@ -199,16 +199,20 @@
         <div class="detect-line" id="company2Line"></div>
       </div>
     </div>
-    <div class="config-row">
-      <div class="config-col">
-        <label>File 1 &middot; Part Number column</label>
-        <select id="pn1Select"></select>
-      </div>
-      <div class="config-col">
-        <label>File 2 &middot; Part Number column</label>
-        <select id="pn2Select"></select>
+
+    <div class="config-row" style="grid-template-columns:1fr;">
+      <div class="config-col" style="max-width:260px;">
+        <label>Number of keys to match on</label>
+        <select id="numKeysSelect">
+          <option value="1">1 key</option>
+          <option value="2">2 keys</option>
+          <option value="3">3 keys</option>
+          <option value="4">4 keys</option>
+        </select>
       </div>
     </div>
+
+    <div id="keyRows"></div>
 
     <button class="run-btn" id="runBtn">Join files</button>
   </div>
@@ -219,12 +223,12 @@
     <div class="table-block">
       <div class="table-head">
         <div class="th-left">
-          <h3>Table 1 &middot; Matched on Part Number</h3>
+          <h3>Table 1 &middot; Matched on selected keys</h3>
           <span class="count-chip" id="chip1">0</span>
         </div>
         <button class="exp-btn" data-export="matched">Export .xlsx</button>
       </div>
-      <p class="table-note">Every part number present in <b>both</b> files, in File 1's row order. Columns from File 2 that don't already exist in File 1 are appended (highlighted header).</p>
+      <p class="table-note" id="table1Note">Every row present in <b>both</b> files, in File 1's row order. Columns from File 2 that don't already exist in File 1 are appended (highlighted header).</p>
       <div class="table-scroll" id="tbl1"></div>
     </div>
 
@@ -236,7 +240,7 @@
         </div>
         <button class="exp-btn" data-export="missing2">Export .xlsx</button>
       </div>
-      <p class="table-note">These part numbers are missing from the DC file (File 2).</p>
+      <p class="table-note" id="table2Note">These key combinations are missing from the DC file (File 2).</p>
       <div class="table-scroll" id="tbl2"></div>
     </div>
 
@@ -248,7 +252,7 @@
         </div>
         <button class="exp-btn" data-export="missing1">Export .xlsx</button>
       </div>
-      <p class="table-note">These part numbers are missing from File 1.</p>
+      <p class="table-note" id="table3Note">These key combinations are missing from File 1.</p>
       <div class="table-scroll" id="tbl3"></div>
     </div>
 
@@ -356,7 +360,8 @@ function fillSheetSelect(selectEl, sheetsObj){
   if (withPn) selectEl.value = withPn;
 }
 
-function fillPnSelect(selectEl, headers){
+function fillColumnSelect(selectEl, headers, guessAsPn){
+  const prevVal = selectEl.value; // preserve a prior choice if still valid
   selectEl.innerHTML = '';
   headers.forEach((h,i) => {
     const opt = document.createElement('option');
@@ -364,8 +369,62 @@ function fillPnSelect(selectEl, headers){
     opt.textContent = h;
     selectEl.appendChild(opt);
   });
-  const guess = guessPnColumn(headers);
-  selectEl.value = guess >= 0 ? guess : 0;
+  if (prevVal !== '' && prevVal !== undefined && Number(prevVal) < headers.length){
+    selectEl.value = prevVal;
+  } else if (guessAsPn){
+    const guess = guessPnColumn(headers);
+    selectEl.value = guess >= 0 ? guess : 0;
+  } else {
+    selectEl.value = 0;
+  }
+}
+
+function renderKeyRows(){
+  const n = parseInt(document.getElementById('numKeysSelect').value, 10);
+  const container = document.getElementById('keyRows');
+  const sh1name = document.getElementById('sheet1Select').value;
+  const sh2name = document.getElementById('sheet2Select').value;
+  const h1 = state.sheets1[sh1name].headers;
+  const h2 = state.sheets2[sh2name].headers;
+
+  // Keep existing rows/selections when just re-rendering after a sheet change;
+  // only add/remove rows when the key count itself changed.
+  const existing = container.querySelectorAll('.key-row').length;
+  if (existing !== n){
+    container.innerHTML = '';
+    for (let i=0;i<n;i++){
+      const row = document.createElement('div');
+      row.className = 'config-row key-row';
+      row.innerHTML = `
+        <div class="config-col">
+          <label>File 1 &middot; Key ${i+1} column</label>
+          <select id="key${i}_file1"></select>
+        </div>
+        <div class="config-col">
+          <label>File 2 &middot; Key ${i+1} column</label>
+          <select id="key${i}_file2"></select>
+        </div>`;
+      container.appendChild(row);
+    }
+  }
+  for (let i=0;i<n;i++){
+    fillColumnSelect(document.getElementById(`key${i}_file1`), h1, i===0);
+    fillColumnSelect(document.getElementById(`key${i}_file2`), h2, i===0);
+  }
+}
+
+function getKeyPairs(){
+  const n = parseInt(document.getElementById('numKeysSelect').value, 10);
+  const pairs = [];
+  for (let i=0;i<n;i++){
+    pairs.push({
+      f1: parseInt(document.getElementById(`key${i}_file1`).value, 10),
+      f2: parseInt(document.getElementById(`key${i}_file2`).value, 10),
+      label1: document.getElementById(`key${i}_file1`).selectedOptions[0].textContent,
+      label2: document.getElementById(`key${i}_file2`).selectedOptions[0].textContent,
+    });
+  }
+  return pairs;
 }
 
 function showErr(msg){
@@ -409,20 +468,19 @@ function maybeShowConfig(){
     fillSheetSelect(document.getElementById('sheet2Select'), state.sheets2);
     refreshSheet1();
     refreshSheet2();
+    renderKeyRows();
   }
 }
 
 function refreshSheet1(){
   const name = document.getElementById('sheet1Select').value;
   const sh = state.sheets1[name];
-  fillPnSelect(document.getElementById('pn1Select'), sh.headers);
   const det = detectCompany({[name]: sh}, state.file1.name);
   renderCompanyLine('company1Line', det);
 }
 function refreshSheet2(){
   const name = document.getElementById('sheet2Select').value;
   const sh = state.sheets2[name];
-  fillPnSelect(document.getElementById('pn2Select'), sh.headers);
   const det = detectCompany({[name]: sh}, state.file2.name);
   renderCompanyLine('company2Line', det);
 }
@@ -436,6 +494,8 @@ function renderCompanyLine(elId, det){
   el.innerHTML = `Detected company: <span class="company-badge">${det.best}</span>`;
 }
 
+document.getElementById('numKeysSelect').addEventListener('change', renderKeyRows);
+
 setupDropzone('dz1','file1','dz1title',(file,wb)=>{
   state.file1 = file; state.wb1 = wb; state.sheets1 = processWorkbook(wb);
   maybeShowConfig();
@@ -445,8 +505,8 @@ setupDropzone('dz2','file2','dz2title',(file,wb)=>{
   maybeShowConfig();
 });
 
-document.getElementById('sheet1Select').addEventListener('change', refreshSheet1);
-document.getElementById('sheet2Select').addEventListener('change', refreshSheet2);
+document.getElementById('sheet1Select').addEventListener('change', ()=>{ refreshSheet1(); renderKeyRows(); });
+document.getElementById('sheet2Select').addEventListener('change', ()=>{ refreshSheet2(); renderKeyRows(); });
 
 let lastResult = null;
 
@@ -456,8 +516,9 @@ document.getElementById('runBtn').addEventListener('click', ()=>{
   const sh2name = document.getElementById('sheet2Select').value;
   const sh1 = state.sheets1[sh1name];
   const sh2 = state.sheets2[sh2name];
-  const pn1Idx = parseInt(document.getElementById('pn1Select').value,10);
-  const pn2Idx = parseInt(document.getElementById('pn2Select').value,10);
+  const keyPairs = getKeyPairs(); // [{f1, f2, label1, label2}, ...]
+  const f1KeyIdx = keyPairs.map(k => k.f1);
+  const f2KeyIdx = keyPairs.map(k => k.f2);
 
   const h1 = sh1.headers, h2 = sh2.headers;
   const rows1 = sh1.rows, rows2 = sh2.rows;
@@ -469,24 +530,32 @@ document.getElementById('runBtn').addEventListener('click', ()=>{
     showErr(`Heads up: File 1 looks like ${c1.best} but File 2 looks like ${c2.best}. Double-check you uploaded matching files before trusting these results.`);
   }
 
-  // Build a queue of file2 rows per part number (not just the first one).
+  function compositeKey(row, idxArr){
+    return idxArr.map(i => normPn(row[i])).join('|~|');
+  }
+  function isBlankKey(row, idxArr){
+    return idxArr.every(i => normPn(row[i]) === '');
+  }
+
+  // Build a queue of file2 rows per composite key (not just the first one).
   // Rows are matched positionally per key so every row from both files ends
-  // up in exactly one table - nothing silently disappears when a part number
-  // repeats (e.g. multiple work orders against the same part).
+  // up in exactly one table - nothing silently disappears when a key
+  // combination repeats (e.g. multiple work orders against the same part).
   const f2Queues = new Map();
   rows2.forEach(r => {
-    const key = normPn(r[pn2Idx]);
-    if (!key) return;
+    if (isBlankKey(r, f2KeyIdx)) return;
+    const key = compositeKey(r, f2KeyIdx);
     if (!f2Queues.has(key)) f2Queues.set(key, []);
     f2Queues.get(key).push(r);
   });
   const consumedFromF2 = new Set(); // row objects already claimed by Table 1
 
-  // extra columns from file2 not already in file1 (by normalized header name), excluding its own PN column
+  // extra columns from file2 not already in file1 (by normalized header name), excluding its own key columns
   const h1NormSet = new Set(h1.map(normHeader));
+  const f2KeySet = new Set(f2KeyIdx);
   const extraCols = [];
   h2.forEach((h,i) => {
-    if (i === pn2Idx) return;
+    if (f2KeySet.has(i)) return;
     if (!h1NormSet.has(normHeader(h))) extraCols.push(i);
   });
 
@@ -494,8 +563,8 @@ document.getElementById('runBtn').addEventListener('click', ()=>{
   const matchedRows = [];
   const missing2Rows = [];
   rows1.forEach(r => {
-    const key = normPn(r[pn1Idx]);
-    if (!key) return;
+    if (isBlankKey(r, f1KeyIdx)) return;
+    const key = compositeKey(r, f1KeyIdx);
     const queue = f2Queues.get(key);
     const r2 = queue && queue.length ? queue.shift() : null; // claim the next unmatched DC row for this key
     if (r2){
@@ -507,31 +576,33 @@ document.getElementById('runBtn').addEventListener('click', ()=>{
   });
 
   // Anything left unclaimed in the per-key queues was never matched -> Table 3
-  const missing1Rows = rows2.filter(r => !consumedFromF2.has(r) && normPn(r[pn2Idx]));
+  const missing1Rows = rows2.filter(r => !consumedFromF2.has(r) && !isBlankKey(r, f2KeyIdx));
 
   lastResult = {
-    matchedHeaders, matchedRows, matchedExtraCount: extraCols.length,
-    h1, missing2Rows, pn1Idx,
-    h2, missing1Rows, pn2Idx,
+    matchedHeaders, matchedRows,
+    h1, missing2Rows, f1KeyIdx,
+    h2, missing1Rows, f2KeyIdx,
+    keyPairs,
     company1: c1.best, company2: c2.best
   };
 
   renderResults();
 });
 
-function renderTable(container, headers, rows, pnIdx, highlightFromIdx){
+function renderTable(container, headers, rows, keyIdxArr, highlightFromIdx){
   container.innerHTML = '';
   if (!rows.length){
     container.innerHTML = `<div class="empty-state">No rows.</div>`;
     return;
   }
+  const keySet = new Set(keyIdxArr || []);
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const trh = document.createElement('tr');
   headers.forEach((h,i)=>{
     const th = document.createElement('th');
     th.textContent = h;
-    if (i===pnIdx) th.classList.add('pn-cell');
+    if (keySet.has(i)) th.classList.add('key-cell');
     if (highlightFromIdx!==undefined && i>=highlightFromIdx) th.classList.add('from-dc');
     trh.appendChild(th);
   });
@@ -545,7 +616,7 @@ function renderTable(container, headers, rows, pnIdx, highlightFromIdx){
       let v = r[i];
       if (v instanceof Date) v = v.toLocaleDateString();
       td.textContent = v===undefined||v===null? '' : v;
-      if (i===pnIdx) td.classList.add('pn-cell');
+      if (keySet.has(i)) td.classList.add('key-cell');
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -558,8 +629,10 @@ function renderResults(){
   const r = lastResult;
   document.getElementById('results').classList.add('show');
 
+  const keyNames = r.keyPairs.map(k => k.label1).join(' + ');
+
   document.getElementById('summaryStrip').innerHTML = `
-    <div class="summary-cell matched"><div class="n">${r.matchedRows.length}</div><div class="l">Matched part numbers</div></div>
+    <div class="summary-cell matched"><div class="n">${r.matchedRows.length}</div><div class="l">Matched on ${keyNames}</div></div>
     <div class="summary-cell miss2"><div class="n">${r.missing2Rows.length}</div><div class="l">Missing from DC file</div></div>
     <div class="summary-cell miss1"><div class="n">${r.missing1Rows.length}</div><div class="l">Missing from File 1</div></div>
     <div class="summary-cell"><div class="n">${r.company1 || '?'} / ${r.company2 || '?'}</div><div class="l">Detected company (File1 / File2)</div></div>
@@ -569,9 +642,16 @@ function renderResults(){
   document.getElementById('chip2').textContent = r.missing2Rows.length;
   document.getElementById('chip3').textContent = r.missing1Rows.length;
 
-  renderTable(document.getElementById('tbl1'), r.matchedHeaders, r.matchedRows, r.pn1Idx, r.h1.length);
-  renderTable(document.getElementById('tbl2'), r.h1, r.missing2Rows, r.pn1Idx);
-  renderTable(document.getElementById('tbl3'), r.h2, r.missing1Rows, r.pn2Idx);
+  document.getElementById('table1Note').textContent =
+    `Every row present in both files, matched on ${keyNames}, in File 1's row order. Columns from File 2 that don't already exist in File 1 are appended (highlighted header).`;
+  document.getElementById('table2Note').textContent =
+    `These key combinations (${keyNames}) are in File 1 but missing from the DC file (File 2).`;
+  document.getElementById('table3Note').textContent =
+    `These key combinations (${keyNames}) are in File 2 but missing from File 1.`;
+
+  renderTable(document.getElementById('tbl1'), r.matchedHeaders, r.matchedRows, r.f1KeyIdx, r.h1.length);
+  renderTable(document.getElementById('tbl2'), r.h1, r.missing2Rows, r.f1KeyIdx);
+  renderTable(document.getElementById('tbl3'), r.h2, r.missing1Rows, r.f2KeyIdx);
 
   document.getElementById('results').scrollIntoView({behavior:'smooth', block:'start'});
 }
